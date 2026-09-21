@@ -25,13 +25,26 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        _engine = create_engine(
-            settings.database_url,
-            pool_size=settings.database_pool_size,
-            echo=settings.database_echo,
-            pool_pre_ping=True,
-        )
-        log.info("database.engine_created", url=settings.database_url.split("@")[-1])
+        url = settings.database_url
+        is_sqlite = url.startswith("sqlite")
+        if is_sqlite:
+            # SQLite: use StaticPool so in-process tests share the same connection,
+            # and connect_args to allow multi-threaded access.
+            from sqlalchemy.pool import StaticPool
+            _engine = create_engine(
+                url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+                echo=settings.database_echo,
+            )
+        else:
+            _engine = create_engine(
+                url,
+                pool_size=settings.database_pool_size,
+                echo=settings.database_echo,
+                pool_pre_ping=True,
+            )
+        log.info("database.engine_created", url=url.split("@")[-1] if "@" in url else url)
     return _engine
 
 
