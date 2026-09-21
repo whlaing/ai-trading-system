@@ -98,22 +98,25 @@ class TestMockBrokerAdapter:
         assert positions[0].current_price == Decimal("110")
 
     def test_commission_calculation(self):
+        # 100 shares at $1 = $100 fill — well within $10,000 budget
         result = self.broker.submit_order(
             symbol="AAPL",
             quantity=100,
             order_type=OrderType.LIMIT,
             direction=Direction.LONG.value,
-            limit_price=Decimal("100"),
+            limit_price=Decimal("1"),
         )
-        # 100 shares * $0.005 = $0.50, but minimum is $1.00
+        # 100 * $0.005 = $0.50, below $1.00 minimum → commission = $1.00
         assert result.commission == Decimal("1.00")
 
     def test_commission_above_minimum(self):
+        # 300 shares at $1 = $300 fill — well within $10,000 budget
         result = self.broker.submit_order(
             symbol="AAPL",
-            quantity=300,  # 300 * $0.005 = $1.50 > minimum $1.00
+            quantity=300,
             order_type=OrderType.LIMIT,
             direction=Direction.LONG.value,
-            limit_price=Decimal("100"),
+            limit_price=Decimal("1"),
         )
+        # 300 * $0.005 = $1.50, above $1.00 minimum → commission = $1.50
         assert result.commission == Decimal("1.50")

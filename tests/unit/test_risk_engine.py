@@ -22,7 +22,7 @@ from src.risk.engine import KillSwitch, RiskEngine
 
 def _make_settings(**kwargs) -> Settings:
     defaults = dict(
-        trading_mode="PAPER",
+        trading_mode="BACKTEST",
         trading_enabled=True,
         max_open_positions=3,
         max_position_value_usd=Decimal("500"),

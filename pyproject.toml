@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ats"
@@ -52,7 +52,6 @@ prod = [
 
 [project.scripts]
 ats-trade = "src.main:main"
-ats-api = "uvicorn src.api.app:app --host 0.0.0.0 --port 8000"
 
 [tool.setuptools.packages.find]
 where = ["."]

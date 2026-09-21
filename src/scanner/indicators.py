@@ -33,8 +33,14 @@ def rsi(prices: list[Decimal], period: int = 14) -> Optional[Decimal]:
     loss = -delta.clip(upper=0)
     avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
-    rs = avg_gain / avg_loss.replace(0, float("nan"))
-    rsi_series = 100 - (100 / (1 + rs))
+    # RSI = 100 when avg_loss = 0 (all gains); RSI = 0 when avg_gain = 0 (all losses)
+    rsi_series = pd.Series(
+        np.where(
+            avg_loss == 0,
+            100.0,
+            np.where(avg_gain == 0, 0.0, 100 - 100 / (1 + avg_gain / avg_loss)),
+        )
+    )
     val = rsi_series.iloc[-1]
     if math.isnan(val):
         return None
