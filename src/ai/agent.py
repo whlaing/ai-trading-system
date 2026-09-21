@@ -1,13 +1,11 @@
 """
 AI Analysis Agent.
 
-Receives only pre-filtered trade candidates and returns a structured
-APPROVE / REJECT / UNCERTAIN decision with reasoning.
+Supports OpenAI and Anthropic as providers, selected by AI_PROVIDER in config.
 
-The AI layer is a advisory opinion — the deterministic Risk Engine
-retains final authority. If the AI is unavailable, existing positions
-continue to be monitored and protected but no new AI-dependent trades
-are opened.
+The AI layer is advisory — the deterministic Risk Engine retains final authority.
+If the AI is unavailable, no new AI-dependent trades are opened but existing
+positions continue to be monitored and protected.
 """
 from __future__ import annotations
 
@@ -15,8 +13,6 @@ import json
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
-
-import anthropic
 
 from src.common.config import Settings
 from src.common.exceptions import AIInvalidResponseError, AITimeoutError
@@ -52,21 +48,37 @@ Rules:
 - Never suggest SHORT positions (not supported in MVP)
 """
 
+# Approximate cost per token (input, output) by known model prefixes
+_COST_TABLE: dict[str, tuple[float, float]] = {
+    "gpt-4o-mini":           (0.00000015,  0.00000060),
+    "gpt-4o":                (0.0000025,   0.000010),
+    "gpt-4-turbo":           (0.000010,    0.000030),
+    "o1-mini":               (0.0000030,   0.000012),
+    "o1":                    (0.000015,    0.000060),
+    "claude-opus":           (0.000015,    0.000075),
+    "claude-sonnet":         (0.000003,    0.000015),
+    "claude-haiku":          (0.00000025,  0.00000125),
+}
+
+
+def _estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> Decimal:
+    for prefix, (in_price, out_price) in _COST_TABLE.items():
+        if model.lower().startswith(prefix):
+            cost = prompt_tokens * in_price + completion_tokens * out_price
+            return Decimal(str(round(cost, 8)))
+    # Unknown model — use a conservative fallback
+    return Decimal(str(round(prompt_tokens * 0.000003 + completion_tokens * 0.000015, 8)))
+
 
 class AIAnalysisAgent:
     def __init__(self, settings: Settings) -> None:
-        self._settings = settings
-        self._client: Optional[anthropic.Anthropic] = None
+        self._s = settings
+        self._client: Optional[object] = None
 
-    def _get_client(self) -> anthropic.Anthropic:
-        if self._client is None:
-            if not self._settings.anthropic_api_key:
-                raise AIInvalidResponseError("ANTHROPIC_API_KEY not configured")
-            self._client = anthropic.Anthropic(api_key=self._settings.anthropic_api_key)
-        return self._client
+    # ── Public interface ─────────────────────────────────────────────────────
 
     def analyse(self, input_data: AIAnalysisInput) -> AIAnalysisOutput:
-        if not self._settings.ai_enabled:
+        if not self._s.ai_enabled:
             log.info("ai.disabled", symbol=input_data.symbol)
             return AIAnalysisOutput(
                 decision=AIDecision.UNCERTAIN,
@@ -78,26 +90,21 @@ class AIAnalysisAgent:
 
         prompt = self._build_prompt(input_data)
 
-        try:
-            client = self._get_client()
-            response = client.messages.create(
-                model=self._settings.ai_model,
-                max_tokens=self._settings.ai_max_tokens,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": prompt}],
-                timeout=self._settings.ai_timeout,
-            )
-        except anthropic.APITimeoutError as exc:
-            raise AITimeoutError(f"AI API timed out for {input_data.symbol}") from exc
-        except anthropic.APIError as exc:
-            raise AIInvalidResponseError(f"AI API error: {exc}") from exc
+        provider = self._s.ai_provider.lower()
+        if provider == "openai":
+            raw_text, prompt_tokens, completion_tokens, model = self._call_openai(prompt)
+        elif provider == "anthropic":
+            raw_text, prompt_tokens, completion_tokens, model = self._call_anthropic(prompt)
+        else:
+            raise AIInvalidResponseError(f"Unknown AI_PROVIDER '{provider}'. Use 'openai' or 'anthropic'.")
 
-        raw_text = response.content[0].text if response.content else ""
-        output = self._parse_response(raw_text, response, input_data.symbol)
+        output = self._parse_response(raw_text, prompt_tokens, completion_tokens, model, input_data.symbol)
 
         log.info(
             "ai.analysis",
             symbol=input_data.symbol,
+            provider=provider,
+            model=model,
             decision=output.decision,
             confidence=output.confidence,
             risk_flags=output.risk_flags,
@@ -106,6 +113,130 @@ class AIAnalysisAgent:
             cost_usd=str(output.cost_usd),
         )
         return output
+
+    # ── Provider calls ───────────────────────────────────────────────────────
+
+    def _call_openai(self, prompt: str) -> tuple[str, int, int, str]:
+        try:
+            import openai
+        except ImportError:
+            raise AIInvalidResponseError(
+                "openai package not installed. Run: pip install openai"
+            )
+
+        if not self._s.openai_api_key:
+            raise AIInvalidResponseError("OPENAI_API_KEY not configured")
+
+        if self._client is None:
+            self._client = openai.OpenAI(api_key=self._s.openai_api_key)
+
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._s.ai_model,
+                max_tokens=self._s.ai_max_tokens,
+                timeout=self._s.ai_timeout,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt},
+                ],
+            )
+        except openai.APITimeoutError as exc:
+            raise AITimeoutError(f"OpenAI API timed out") from exc
+        except openai.APIError as exc:
+            raise AIInvalidResponseError(f"OpenAI API error: {exc}") from exc
+
+        raw_text = resp.choices[0].message.content or ""
+        pt = resp.usage.prompt_tokens if resp.usage else 0
+        ct = resp.usage.completion_tokens if resp.usage else 0
+        return raw_text, pt, ct, resp.model
+
+    def _call_anthropic(self, prompt: str) -> tuple[str, int, int, str]:
+        try:
+            import anthropic
+        except ImportError:
+            raise AIInvalidResponseError(
+                "anthropic package not installed. Run: pip install anthropic"
+            )
+
+        if not self._s.anthropic_api_key:
+            raise AIInvalidResponseError("ANTHROPIC_API_KEY not configured")
+
+        if self._client is None:
+            self._client = anthropic.Anthropic(api_key=self._s.anthropic_api_key)
+
+        try:
+            resp = self._client.messages.create(
+                model=self._s.ai_model,
+                max_tokens=self._s.ai_max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=self._s.ai_timeout,
+            )
+        except anthropic.APITimeoutError as exc:
+            raise AITimeoutError(f"Anthropic API timed out") from exc
+        except anthropic.APIError as exc:
+            raise AIInvalidResponseError(f"Anthropic API error: {exc}") from exc
+
+        raw_text = resp.content[0].text if resp.content else ""
+        pt = resp.usage.input_tokens if resp.usage else 0
+        ct = resp.usage.output_tokens if resp.usage else 0
+        return raw_text, pt, ct, resp.model
+
+    # ── Shared parser ────────────────────────────────────────────────────────
+
+    def _parse_response(
+        self,
+        raw_text: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        model: str,
+        symbol: str,
+    ) -> AIAnalysisOutput:
+        if not raw_text.strip():
+            raise AIInvalidResponseError(f"AI returned empty response for {symbol}")
+
+        # Strip markdown code fences if present
+        json_text = raw_text.strip()
+        if "```" in json_text:
+            start = json_text.find("{")
+            end = json_text.rfind("}") + 1
+            if start >= 0 and end > start:
+                json_text = json_text[start:end]
+
+        try:
+            data = json.loads(json_text)
+        except json.JSONDecodeError as exc:
+            raise AIInvalidResponseError(
+                f"AI returned invalid JSON for {symbol}: {exc}. Raw: {raw_text[:200]}"
+            ) from exc
+
+        decision_str = data.get("decision", "")
+        try:
+            decision = AIDecision(decision_str)
+        except ValueError:
+            raise AIInvalidResponseError(
+                f"AI returned unknown decision '{decision_str}' for {symbol}"
+            )
+
+        confidence = float(data.get("confidence", 0.0))
+        if not 0.0 <= confidence <= 1.0:
+            raise AIInvalidResponseError(f"AI confidence {confidence} out of range for {symbol}")
+
+        return AIAnalysisOutput(
+            decision=decision,
+            confidence=confidence,
+            risk_flags=data.get("risk_flags", []),
+            reason=str(data.get("reason", "")),
+            suggested_action=str(data.get("suggested_action", "NONE")),
+            raw_response=raw_text,
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=_estimate_cost(model, prompt_tokens, completion_tokens),
+        )
+
+    # ── Prompt builder ───────────────────────────────────────────────────────
 
     def _build_prompt(self, data: AIAnalysisInput) -> str:
         t = data.indicators
@@ -144,59 +275,3 @@ class AIAnalysisAgent:
             lines += ["", f"Market Regime: {data.market_regime}"]
 
         return "\n".join(lines)
-
-    def _parse_response(
-        self,
-        raw_text: str,
-        response: anthropic.types.Message,
-        symbol: str,
-    ) -> AIAnalysisOutput:
-        # Extract token counts and estimate cost
-        prompt_tokens = response.usage.input_tokens if response.usage else 0
-        completion_tokens = response.usage.output_tokens if response.usage else 0
-        # Approximate cost for Claude Sonnet (adjust per current pricing)
-        cost = Decimal(str(prompt_tokens)) * Decimal("0.000003") + Decimal(str(completion_tokens)) * Decimal("0.000015")
-
-        if not raw_text.strip():
-            raise AIInvalidResponseError(f"AI returned empty response for {symbol}")
-
-        # Extract JSON from the response (handle markdown code blocks)
-        json_text = raw_text.strip()
-        if "```" in json_text:
-            start = json_text.find("{")
-            end = json_text.rfind("}") + 1
-            if start >= 0 and end > start:
-                json_text = json_text[start:end]
-
-        try:
-            data = json.loads(json_text)
-        except json.JSONDecodeError as exc:
-            raise AIInvalidResponseError(
-                f"AI returned invalid JSON for {symbol}: {exc}. Raw: {raw_text[:200]}"
-            ) from exc
-
-        # Validate required fields
-        decision_str = data.get("decision", "")
-        try:
-            decision = AIDecision(decision_str)
-        except ValueError:
-            raise AIInvalidResponseError(
-                f"AI returned unknown decision '{decision_str}' for {symbol}"
-            )
-
-        confidence = float(data.get("confidence", 0.0))
-        if not 0.0 <= confidence <= 1.0:
-            raise AIInvalidResponseError(f"AI confidence {confidence} out of range for {symbol}")
-
-        return AIAnalysisOutput(
-            decision=decision,
-            confidence=confidence,
-            risk_flags=data.get("risk_flags", []),
-            reason=str(data.get("reason", "")),
-            suggested_action=str(data.get("suggested_action", "NONE")),
-            raw_response=raw_text,
-            model=response.model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_usd=cost,
-        )

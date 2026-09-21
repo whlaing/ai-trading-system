@@ -44,8 +44,13 @@ class Settings(BaseSettings):
     aws_secrets_manager_prefix: str = "ats/"
 
     # --- AI ---
+    ai_provider: str = "openai"           # "openai" or "anthropic"
+    openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
-    ai_model: str = "claude-opus-5"
+    # Model name must match the chosen provider:
+    #   OpenAI:    gpt-4o-mini  gpt-4o  o1-mini
+    #   Anthropic: claude-sonnet-5  claude-haiku-4-5-20251001
+    ai_model: str = "gpt-4o-mini"
     ai_max_tokens: int = 1024
     ai_timeout: int = 30
     ai_enabled: bool = True
