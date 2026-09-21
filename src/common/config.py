@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # --- Scanner ---
     scan_interval_seconds: int = 60
     max_candidates: int = 10
+    # Universe source for live scanner ("hardcoded" uses the `universe` list above)
+    universe_source: str = "hardcoded"   # hardcoded | sp500 | nasdaq100 | sp400 | all
+
+    # --- Scanner filters (used by scripts/scan.py and MarketScanner) ---
+    scan_min_price: float = 10.0
+    scan_min_avg_volume: float = 1_000_000
+    scan_min_rvol: float = 0.7
 
     # --- Risk Parameters (paper defaults) ---
     max_open_positions: int = 3
