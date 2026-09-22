@@ -27,11 +27,33 @@ class MarketScanner:
         self._data = market_data
         self._settings = settings
 
+    def _get_universe(self) -> list[str]:
+        if self._settings.universe_source == "scan_file":
+            import json, os
+            path = self._settings.scan_results_file
+            if not os.path.exists(path):
+                log.warning("scanner.scan_file_missing", path=path, fallback="hardcoded universe")
+                return self._settings.universe
+            with open(path) as f:
+                data = json.load(f)
+            if isinstance(data, dict) and "symbols" in data:
+                symbols = data["symbols"]
+            elif isinstance(data, list) and data and isinstance(data[0], dict):
+                symbols = [item["symbol"] for item in data if "symbol" in item]
+            else:
+                symbols = [str(s) for s in data]
+            log.info("scanner.loaded_from_file", path=path, count=len(symbols))
+            return symbols
+        return self._settings.universe
+
     def scan(self) -> list[TechnicalIndicators]:
         """Return a ranked list of candidate symbols (up to max_candidates)."""
         candidates: list[tuple[float, TechnicalIndicators]] = []
 
-        for symbol in self._settings.universe:
+        universe = self._get_universe()
+        log.info("scanner.scanning", universe_size=len(universe), source=self._settings.universe_source)
+
+        for symbol in universe:
             try:
                 tech = self._compute_indicators(symbol)
                 if tech is None:
@@ -39,13 +61,28 @@ class MarketScanner:
                 score = self._score(tech)
                 if score > 0:
                     candidates.append((score, tech))
-                    log.debug("scanner.candidate", symbol=symbol, score=round(score, 3))
+                    log.info(
+                        "scanner.candidate_passed",
+                        symbol=symbol,
+                        score=round(score, 3),
+                        price=str(tech.price),
+                        rsi=str(round(float(tech.rsi_14), 1)) if tech.rsi_14 else None,
+                        rvol=str(round(float(tech.relative_volume), 2)) if tech.relative_volume else None,
+                    )
+                else:
+                    log.debug("scanner.candidate_filtered", symbol=symbol)
             except Exception as exc:
                 log.warning("scanner.symbol_error", symbol=symbol, error=str(exc))
 
         candidates.sort(key=lambda x: x[0], reverse=True)
         selected = [tech for _, tech in candidates[: self._settings.max_candidates]]
-        log.info("scanner.scan_complete", total=len(self._settings.universe), candidates=len(selected))
+        log.info(
+            "scanner.scan_complete",
+            total=len(universe),
+            passed=len(candidates),
+            selected=len(selected),
+            top_picks=[t.symbol for _, t in candidates[: self._settings.max_candidates]],
+        )
         return selected
 
     def _compute_indicators(self, symbol: str) -> Optional[TechnicalIndicators]:

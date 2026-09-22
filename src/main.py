@@ -12,7 +12,7 @@ from datetime import datetime
 
 from src.ai.agent import AIAnalysisAgent
 from src.broker.ibkr_adapter import IBKRAdapter
-from src.common.config import TradingMode, get_settings
+from src.common.config import TradingMode, get_settings, load_scan_symbols
 from src.common.exceptions import BrokerConnectionError, LiveTradingNotAllowedError
 from src.common.logging import configure_logging, get_logger
 from src.execution.engine import ExecutionEngine
@@ -51,6 +51,14 @@ def main():
 
     if settings.trading_mode == TradingMode.LIVE and not settings.trading_enabled:
         raise LiveTradingNotAllowedError("TRADING_ENABLED must be true and TRADING_MODE=LIVE to run live")
+
+    if settings.universe_source.lower() == "scan_file":
+        settings.universe = load_scan_symbols(settings)
+        log.info(
+            "main.scan_universe_loaded",
+            path=settings.scan_results_file,
+            symbols=settings.universe,
+        )
 
     # --- Bootstrap ---
     create_all_tables()
@@ -110,7 +118,7 @@ def main():
 
             market_status = market_data.get_market_status()
             if not market_status.is_open:
-                log.debug("main.market_closed", next_open=str(market_status.next_open))
+                log.info("main.market_closed", session=market_status.session, next_open=str(market_status.next_open))
                 time.sleep(60)
                 continue
 
@@ -130,14 +138,15 @@ def main():
                 continue
 
             # --- Scan universe ---
+            log.info("main.loop_tick", time=datetime.utcnow().strftime("%H:%M:%S UTC"))
             candidates = scanner.scan()
 
             # --- Evaluate strategy for each candidate ---
             for indicators in candidates:
-                signal = strategy.evaluate(indicators)
-                if signal is None:
+                trade_signal = strategy.evaluate(indicators)
+                if trade_signal is None:
                     continue
-                record = execution.process_signal(signal)
+                record = execution.process_signal(trade_signal)
                 if record and record.status.value == "FILLED":
                     notifications.trade_opened(
                         record.symbol,

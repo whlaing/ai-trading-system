@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import datetime, timedelta
@@ -99,11 +100,53 @@ def fetch_sp400() -> list[str]:
     return tickers
 
 
+# SGX Straits Times Index (STI) 30 components + liquid mid-caps
+# Tickers use yfinance .SI suffix for download; IBKR uses the base code on SGX exchange
+_SGX_STI_TICKERS = [
+    "D05.SI",   # DBS Group
+    "O39.SI",   # OCBC Bank
+    "U11.SI",   # UOB
+    "Z74.SI",   # Singtel
+    "C6L.SI",   # Singapore Airlines
+    "BN4.SI",   # Keppel Corp
+    "G13.SI",   # Genting Singapore
+    "H78.SI",   # Hongkong Land
+    "J36.SI",   # Jardine Matheson
+    "J37.SI",   # Jardine Cycle & Carriage
+    "C38U.SI",  # CapitaLand Integrated Commercial Trust
+    "A17U.SI",  # Ascendas REIT
+    "ME8U.SI",  # Mapletree Industrial Trust
+    "M44U.SI",  # Mapletree Logistics Trust
+    "N2IU.SI",  # Mapletree Pan Asia Commercial Trust
+    "U96.SI",   # Sembcorp Industries
+    "S63.SI",   # ST Engineering
+    "V03.SI",   # Venture Corp
+    "BS6.SI",   # YZJ Shipbldg SGD
+    "9CI.SI",   # CapitaLand Investment
+    "C09.SI",   # City Developments
+    "F34.SI",   # Wilmar International
+    "D01.SI",   # DFI Retail Group
+    "S58.SI",   # SATS
+    "T39.SI",   # SIA Engineering
+    "U14.SI",   # UOL Group
+    "Y92.SI",   # Thai Beverage
+    "AWX.SI",   # AEM Holdings
+    "V2Y.SI",   # ComfortDelGro
+    "BVA.SI",   # Frencken Group
+]
+
+
+def fetch_sgx_sti() -> list[str]:
+    """Return SGX STI component tickers (yfinance .SI format)."""
+    return sorted(_SGX_STI_TICKERS)
+
+
 def get_universe(source: str, extra: list[str]) -> list[str]:
     fetchers = {
         "sp500": fetch_sp500,
         "nasdaq100": fetch_nasdaq100,
         "sp400": fetch_sp400,
+        "sgx": fetch_sgx_sti,
     }
     if source == "all":
         tickers = list({*fetch_sp500(), *fetch_nasdaq100()})
@@ -303,6 +346,26 @@ def print_results(results: list[dict], top: int) -> None:
     print(f"\n  Showing top {len(shown)} of {len(results)} candidates that passed all filters.\n")
 
 
+def write_results(results: list[dict], top: int, output: str, universe: str) -> None:
+    """Persist the selected candidates for the paper/live trader."""
+    path = Path(output)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    selected = results[:top]
+
+    # Strip yfinance exchange suffixes (.SI, .HK, .L, etc.) so IBKR gets the bare ticker
+    def _ibkr_symbol(sym: str) -> str:
+        return sym.split(".")[0] if "." in sym else sym
+
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "universe": universe,
+        "symbols": [_ibkr_symbol(r["symbol"]) for r in selected],
+        "results": [{**r, "symbol": _ibkr_symbol(r["symbol"])} for r in selected],
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"  Wrote {len(selected)} candidates → {path}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,11 +374,16 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="ATS Stock Scanner")
     p.add_argument(
         "--universe", default="sp500",
-        choices=["sp500", "nasdaq100", "sp400", "all"],
+        choices=["sp500", "nasdaq100", "sp400", "all", "sgx"],
         help="Universe to scan (default: sp500)",
     )
     p.add_argument("--tickers", nargs="*", default=[], help="Add extra tickers to the universe")
     p.add_argument("--top", type=int, default=20, help="Number of top results to show (default: 20)")
+    p.add_argument(
+        "--output",
+        default="data/scan_candidates.json",
+        help="JSON output consumed by the trader (default: data/scan_candidates.json)",
+    )
     p.add_argument("--days", type=int, default=90, help="Days of history to download (default: 90)")
 
     f = p.add_argument_group("filters")
@@ -388,6 +456,7 @@ def main() -> None:
     print(f"  Filters: price≥${args.min_price:.0f}  avgVol≥{args.min_vol/1e6:.1f}M  "
           f"RSI[{args.rsi_min},{args.rsi_max}]  relVol≥{args.min_rvol}  ATR≤{args.atr_max_pct:.0%}")
     print_results(results, args.top)
+    write_results(results, args.top, args.output, args.universe)
 
 
 if __name__ == "__main__":

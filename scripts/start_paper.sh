@@ -48,12 +48,26 @@ echo "    → Make sure TWS or IB Gateway is running and API is enabled"
 # 5. Check AI setting
 AI_ENABLED=$(grep '^AI_ENABLED=' "$ROOT/.env" | cut -d= -f2 | tr -d ' ')
 if [ "$AI_ENABLED" = "true" ]; then
-  API_KEY=$(grep '^ANTHROPIC_API_KEY=' "$ROOT/.env" | cut -d= -f2 | tr -d ' ')
+  AI_PROVIDER=$(grep '^AI_PROVIDER=' "$ROOT/.env" | cut -d= -f2 | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+  case "$AI_PROVIDER" in
+    openai)
+      API_KEY=$(grep '^OPENAI_API_KEY=' "$ROOT/.env" | cut -d= -f2 | tr -d ' ')
+      API_KEY_NAME="OPENAI_API_KEY"
+      ;;
+    anthropic)
+      API_KEY=$(grep '^ANTHROPIC_API_KEY=' "$ROOT/.env" | cut -d= -f2 | tr -d ' ')
+      API_KEY_NAME="ANTHROPIC_API_KEY"
+      ;;
+    *)
+      echo "  ✗ Unsupported AI_PROVIDER=$AI_PROVIDER — use openai or anthropic"
+      exit 1
+      ;;
+  esac
   if [[ "$API_KEY" == *"REPLACE_WITH"* ]] || [ -z "$API_KEY" ]; then
-    echo "  ✗ AI_ENABLED=true but ANTHROPIC_API_KEY is not set in .env"
+    echo "  ✗ AI_ENABLED=true but $API_KEY_NAME is not set in .env"
     exit 1
   fi
-  echo "  ✓ AI enabled (claude)"
+  echo "  ✓ AI enabled ($AI_PROVIDER)"
 else
   echo "  ℹ AI disabled — set AI_ENABLED=true in .env to enable"
 fi

@@ -204,6 +204,15 @@ class ExecutionEngine:
         record.take_profit = risk_decision.approved_target
         record.status = TradeStatus.RISK_APPROVED
 
+        log.info(
+            "execution.risk_approved",
+            symbol=proposal.symbol,
+            quantity=risk_decision.approved_quantity,
+            entry=str(risk_decision.approved_entry),
+            stop=str(risk_decision.approved_stop),
+            target=str(risk_decision.approved_target),
+        )
+
         with get_db() as db:
             TradeRepository(db).save(record)
             AuditRepository(db).log_event(
@@ -277,7 +286,7 @@ class ExecutionEngine:
                 symbol=record.symbol,
                 severity="WARNING",
             )
-        log.info("execution.rejected", symbol=record.symbol, reason=reason, event=event)
+        log.info("execution.rejected", symbol=record.symbol, reason=reason, rejection_event=event)
         return record
 
     def _save(self, record: TradeRecord) -> None:

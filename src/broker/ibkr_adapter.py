@@ -10,6 +10,7 @@ from decimal import Decimal
 from typing import Optional
 
 from src.broker.base import BrokerAdapter, OrderResult
+from src.common.config import get_settings
 from src.common.exceptions import BrokerConnectionError, BrokerExecutionError, LiveTradingNotAllowedError
 from src.common.logging import get_logger
 from src.common.models import AccountState, Direction, OrderType, Position
@@ -37,6 +38,12 @@ class IBKRAdapter(BrokerAdapter):
         return self._ib
 
     def connect(self) -> None:
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
         import ib_insync as ibi
 
         self._ib = ibi.IB()
@@ -45,6 +52,13 @@ class IBKRAdapter(BrokerAdapter):
             log.info("ibkr.connected", host=self._host, port=self._port, live=self._is_live)
         except Exception as exc:
             self._ib = None
+            msg = str(exc)
+            if "client id is already in use" in msg.lower() or "326" in msg:
+                raise BrokerConnectionError(
+                    f"clientId={self._client_id} is already in use by TWS. "
+                    f"Increment IBKR_CLIENT_ID in .env (e.g. to {self._client_id + 1}), "
+                    f"or wait ~60s for TWS to release it."
+                ) from exc
             raise BrokerConnectionError(f"Failed to connect to IBKR: {exc}") from exc
 
     def disconnect(self) -> None:
@@ -128,8 +142,9 @@ class IBKRAdapter(BrokerAdapter):
             # Extra guard: live trading requires explicit configuration
             log.warning("ibkr.live_order", symbol=symbol, quantity=quantity)
 
+        settings = get_settings()
         ib = self._get_ib()
-        contract = ibi.Stock(symbol, "SMART", "USD")
+        contract = ibi.Stock(symbol, settings.exchange, settings.exchange_currency)
         ib.qualifyContracts(contract)
 
         action = "BUY" if direction == Direction.LONG.value else "SELL"

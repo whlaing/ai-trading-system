@@ -93,6 +93,27 @@ export TRADING_MODE=PAPER
 python -m src.main
 ```
 
+To discover the trading universe dynamically, run the broad scanner before
+starting the trader:
+
+```bash
+python scripts/scan.py --universe sp500 --top 20
+```
+
+This writes the ranked candidates and their indicator values to
+`data/scan_candidates.json`. Set the following in `.env` so the trader loads
+the saved symbols instead of the `UNIVERSE` list:
+
+```dotenv
+UNIVERSE_SOURCE=scan_file
+SCAN_RESULTS_FILE=data/scan_candidates.json
+MAX_CANDIDATES=10
+```
+
+The trader loads all saved symbols as its scan universe, then
+`MAX_CANDIDATES` controls how many passing symbols are sent to the strategy on
+each runtime scan. Re-run `scripts/scan.py` to refresh the saved universe.
+
 ### 4. Dashboard
 
 ```bash

@@ -56,10 +56,10 @@ class NotificationService:
             "details": details or {},
         }
 
-        log.info("notification.send", event=event.value, message=message, symbol=symbol, trade_id=trade_id)
+        log.info("notification.send", notification_event=event.value, message=message, symbol=symbol, trade_id=trade_id)
 
         if not self._settings.aws_sns_topic_arn:
-            log.debug("notification.sns_not_configured", event=event.value)
+            log.debug("notification.sns_not_configured", notification_event=event.value)
             return
 
         try:
@@ -79,7 +79,7 @@ class NotificationService:
                 },
             )
         except Exception as exc:
-            log.error("notification.send_error", error=str(exc), event=event.value)
+            log.error("notification.send_error", error=str(exc), notification_event=event.value)
 
     def trade_opened(self, symbol: str, trade_id: str, entry: Decimal, quantity: int, stop: Decimal) -> None:
         self.send(

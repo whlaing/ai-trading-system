@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 from pydantic import Field
@@ -25,6 +27,15 @@ class Settings(BaseSettings):
     # --- Runtime Mode ---
     trading_mode: TradingMode = TradingMode.PAPER
     trading_enabled: bool = True
+
+    # --- Market / Exchange ---
+    # US:  exchange=SMART  currency=USD  timezone=America/New_York  open=09:30  close=16:00
+    # SG:  exchange=SGX    currency=SGD  timezone=Asia/Singapore    open=09:00  close=17:00
+    exchange: str = "SMART"
+    exchange_currency: str = "USD"
+    market_timezone: str = "America/New_York"
+    market_open_time: str = "09:30"   # HH:MM local exchange time
+    market_close_time: str = "16:00"  # HH:MM local exchange time
 
     # --- IBKR Connection ---
     ibkr_host: str = "127.0.0.1"
@@ -63,8 +74,9 @@ class Settings(BaseSettings):
     # --- Scanner ---
     scan_interval_seconds: int = 60
     max_candidates: int = 10
-    # Universe source for live scanner ("hardcoded" uses the `universe` list above)
-    universe_source: str = "hardcoded"   # hardcoded | sp500 | nasdaq100 | sp400 | all
+    # Use "scan_file" to load symbols written by scripts/scan.py.
+    universe_source: str = "hardcoded"   # hardcoded | scan_file
+    scan_results_file: str = "data/scan_candidates.json"
 
     # --- Scanner filters (used by scripts/scan.py and MarketScanner) ---
     scan_min_price: float = 10.0
@@ -129,3 +141,27 @@ def get_settings() -> Settings:
     if _settings is None:
         _settings = Settings()
     return _settings
+
+
+def load_scan_symbols(settings: Settings) -> list[str]:
+    """Load and validate symbols produced by scripts/scan.py."""
+    path = Path(settings.scan_results_file)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Scan results file not found: {path}. Run "
+            f"'python scripts/scan.py --output {path}' first."
+        )
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid scan results JSON in {path}: {exc}") from exc
+
+    symbols = payload.get("symbols")
+    if not isinstance(symbols, list) or not symbols:
+        raise ValueError(f"Scan results file {path} must contain a non-empty 'symbols' list")
+
+    normalized = [symbol.strip().upper() for symbol in symbols if isinstance(symbol, str) and symbol.strip()]
+    if not normalized:
+        raise ValueError(f"Scan results file {path} contains no valid symbols")
+    return list(dict.fromkeys(normalized))

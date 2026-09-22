@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
+from src.common.config import get_settings
 from src.common.exceptions import MarketDataError, StaleDataError
 from src.common.logging import get_logger
 from src.common.models import Candle, MarketStatus, Quote
@@ -36,7 +37,8 @@ class IBKRMarketDataProvider(MarketDataProvider):
     def get_quote(self, symbol: str) -> Quote:
         import ib_insync as ibi
 
-        contract = ibi.Stock(symbol, "SMART", "USD")
+        settings = get_settings()
+        contract = ibi.Stock(symbol, settings.exchange, settings.exchange_currency)
         self._ib.qualifyContracts(contract)
         ticker = self._ib.reqMktData(contract, "", False, False)
 
@@ -89,7 +91,8 @@ class IBKRMarketDataProvider(MarketDataProvider):
         else:
             duration = f"{max(1, lookback // 390)} D"
 
-        contract = ibi.Stock(symbol, "SMART", "USD")
+        settings = get_settings()
+        contract = ibi.Stock(symbol, settings.exchange, settings.exchange_currency)
         self._ib.qualifyContracts(contract)
 
         end_dt = end.strftime("%Y%m%d %H:%M:%S") if end else ""
@@ -120,26 +123,44 @@ class IBKRMarketDataProvider(MarketDataProvider):
         ]
 
     def get_market_status(self) -> MarketStatus:
-        now = datetime.utcnow()
-        # NYSE regular session 14:30–21:00 UTC
-        market_open = now.replace(hour=14, minute=30, second=0, microsecond=0)
-        market_close = now.replace(hour=21, minute=0, second=0, microsecond=0)
+        import pytz
+
+        settings = get_settings()
+        tz = pytz.timezone(settings.market_timezone)
+        now_local = datetime.now(tz)
+
+        open_h, open_m = map(int, settings.market_open_time.split(":"))
+        close_h, close_m = map(int, settings.market_close_time.split(":"))
 
         # Weekend check
-        if now.weekday() >= 5:
-            next_monday = now + timedelta(days=(7 - now.weekday()))
+        if now_local.weekday() >= 5:
+            days_until_monday = 7 - now_local.weekday()
+            next_monday = now_local + timedelta(days=days_until_monday)
+            next_open = tz.localize(datetime(next_monday.year, next_monday.month, next_monday.day, open_h, open_m))
             return MarketStatus(
                 is_open=False,
                 session="CLOSED",
-                next_open=next_monday.replace(hour=14, minute=30),
+                next_open=next_open.astimezone(pytz.utc).replace(tzinfo=None),
             )
 
-        is_open = market_open <= now < market_close
-        session = "REGULAR" if is_open else ("PRE" if now < market_open else "POST")
+        market_open = tz.localize(datetime(now_local.year, now_local.month, now_local.day, open_h, open_m))
+        market_close = tz.localize(datetime(now_local.year, now_local.month, now_local.day, close_h, close_m))
+
+        is_open = market_open <= now_local < market_close
+        session = "REGULAR" if is_open else ("PRE" if now_local < market_open else "POST")
+
+        log.info(
+            "market_status",
+            exchange=settings.exchange,
+            timezone=settings.market_timezone,
+            local_time=now_local.strftime("%H:%M %Z"),
+            session=session,
+            is_open=is_open,
+        )
 
         return MarketStatus(
             is_open=is_open,
             session=session,
-            next_open=market_open if not is_open else None,
-            next_close=market_close if is_open else None,
+            next_open=market_open.astimezone(pytz.utc).replace(tzinfo=None) if not is_open else None,
+            next_close=market_close.astimezone(pytz.utc).replace(tzinfo=None) if is_open else None,
         )
