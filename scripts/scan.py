@@ -370,30 +370,52 @@ def write_results(results: list[dict], top: int, output: str, universe: str) -> 
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Per-universe filter defaults — override US defaults for smaller markets
+_UNIVERSE_DEFAULTS = {
+    "sgx":     dict(min_price=0.50, min_vol=100_000, min_rvol=0.1, rsi_min=35, rsi_max=75, atr_max_pct=0.08),
+    "sp500":   dict(min_price=10.0, min_vol=500_000, min_rvol=0.5, rsi_min=40, rsi_max=72, atr_max_pct=0.06),
+    "nasdaq100": dict(min_price=10.0, min_vol=500_000, min_rvol=0.5, rsi_min=40, rsi_max=72, atr_max_pct=0.06),
+}
+
+
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="ATS Stock Scanner")
+    p = argparse.ArgumentParser(
+        description="ATS Stock Scanner",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     p.add_argument(
         "--universe", default="sp500",
         choices=["sp500", "nasdaq100", "sp400", "all", "sgx"],
-        help="Universe to scan (default: sp500)",
+        help="Universe to scan",
     )
     p.add_argument("--tickers", nargs="*", default=[], help="Add extra tickers to the universe")
-    p.add_argument("--top", type=int, default=20, help="Number of top results to show (default: 20)")
+    p.add_argument("--top", type=int, default=20, help="Number of top results to show")
     p.add_argument(
         "--output",
         default="data/scan_candidates.json",
-        help="JSON output consumed by the trader (default: data/scan_candidates.json)",
+        help="JSON output consumed by the trader",
     )
-    p.add_argument("--days", type=int, default=90, help="Days of history to download (default: 90)")
+    p.add_argument("--days", type=int, default=90, help="Days of history to download")
 
-    f = p.add_argument_group("filters")
-    f.add_argument("--min-price",   type=float, default=10.0,       help="Min stock price (default: 10)")
-    f.add_argument("--min-vol",     type=float, default=1_000_000,  help="Min 20-day avg volume (default: 1M)")
-    f.add_argument("--min-rvol",    type=float, default=0.7,        help="Min relative volume (default: 0.7)")
-    f.add_argument("--rsi-min",     type=int,   default=40,         help="RSI lower bound (default: 40)")
-    f.add_argument("--rsi-max",     type=int,   default=72,         help="RSI upper bound (default: 72)")
-    f.add_argument("--atr-max-pct", type=float, default=0.06,       help="Max ATR %% of price (default: 6%%)")
-    return p.parse_args()
+    f = p.add_argument_group("filters (universe-specific defaults applied automatically)")
+    f.add_argument("--min-price",   type=float, default=None, help="Min stock price")
+    f.add_argument("--min-vol",     type=float, default=None, help="Min 20-day avg volume")
+    f.add_argument("--min-rvol",    type=float, default=None, help="Min relative volume")
+    f.add_argument("--rsi-min",     type=int,   default=None, help="RSI lower bound")
+    f.add_argument("--rsi-max",     type=int,   default=None, help="RSI upper bound")
+    f.add_argument("--atr-max-pct", type=float, default=None, help="Max ATR %% of price")
+
+    args = p.parse_args()
+
+    # Apply universe-specific defaults, then US defaults for anything still None
+    universe_defaults = _UNIVERSE_DEFAULTS.get(args.universe, {})
+    us_defaults = dict(min_price=10.0, min_vol=1_000_000, min_rvol=0.7, rsi_min=40, rsi_max=72, atr_max_pct=0.06)
+    for key, us_val in us_defaults.items():
+        arg_key = key.replace("-", "_")
+        if getattr(args, arg_key) is None:
+            setattr(args, arg_key, universe_defaults.get(key, us_val))
+
+    return args
 
 
 def main() -> None:
