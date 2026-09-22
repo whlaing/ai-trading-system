@@ -39,7 +39,9 @@ class IBKRMarketDataProvider(MarketDataProvider):
 
         settings = get_settings()
         contract = ibi.Stock(symbol, settings.exchange, settings.exchange_currency)
-        self._ib.qualifyContracts(contract)
+        qualified = self._ib.qualifyContracts(contract)
+        if not qualified:
+            raise MarketDataError(f"IBKR could not find contract for {symbol} on {settings.exchange} — symbol may be delisted or needs a different exchange")
         ticker = self._ib.reqMktData(contract, "", False, False)
 
         # Allow a brief moment for data to arrive
@@ -93,7 +95,9 @@ class IBKRMarketDataProvider(MarketDataProvider):
 
         settings = get_settings()
         contract = ibi.Stock(symbol, settings.exchange, settings.exchange_currency)
-        self._ib.qualifyContracts(contract)
+        qualified = self._ib.qualifyContracts(contract)
+        if not qualified:
+            raise MarketDataError(f"IBKR could not find contract for {symbol} on {settings.exchange}")
 
         end_dt = end.strftime("%Y%m%d %H:%M:%S") if end else ""
         bars = self._ib.reqHistoricalData(

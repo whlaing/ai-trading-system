@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(brew list *)",
+      "Read(//usr/local/bin/**)"
+    ]
+  }
+}

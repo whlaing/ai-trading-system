@@ -17,6 +17,7 @@ from src.common.exceptions import BrokerConnectionError, LiveTradingNotAllowedEr
 from src.common.logging import configure_logging, get_logger
 from src.execution.engine import ExecutionEngine
 from src.market_data.providers.ibkr_provider import IBKRMarketDataProvider
+from src.market_data.providers.yfinance_provider import YFinanceProvider
 from src.market_data.service import MarketDataService
 from src.notifications.service import NotificationService
 from src.persistence.database import create_all_tables
@@ -79,8 +80,13 @@ def main():
         notifications.system_error("broker", str(exc))
         return
 
-    ibkr_data_provider = IBKRMarketDataProvider(broker._ib)
-    market_data = MarketDataService(ibkr_data_provider)
+    if settings.data_provider == "yfinance":
+        log.info("main.data_provider", provider="yfinance", note="15-min delayed, no subscription needed")
+        data_provider = YFinanceProvider()
+    else:
+        log.info("main.data_provider", provider="ibkr")
+        data_provider = IBKRMarketDataProvider(broker._ib)
+    market_data = MarketDataService(data_provider)
     risk_engine = RiskEngine(settings, kill_switch)
     ai_agent = AIAnalysisAgent(settings)
     strategy = TrendMomentumStrategy(settings)

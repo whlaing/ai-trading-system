@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     market_open_time: str = "09:30"   # HH:MM local exchange time
     market_close_time: str = "16:00"  # HH:MM local exchange time
 
+    # --- Data Provider ---
+    # ibkr     = real-time via IBKR TWS (requires market data subscription)
+    # yfinance = free 15-min delayed data (no subscription needed, good for SGX paper trading)
+    data_provider: str = "ibkr"
+    # yfinance ticker suffix for the exchange (e.g. ".SI" for SGX, "" for US)
+    yfinance_suffix: str = ""
+
     # --- IBKR Connection ---
     ibkr_host: str = "127.0.0.1"
     ibkr_port_paper: int = 7497
